@@ -1,0 +1,227 @@
+use serde::{Deserialize, Serialize};
+
+/// Describes how credentials are conveyed for a given ICE server.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum IceCredentialType {
+    #[default]
+    Password,
+    Oauth,
+}
+
+/// Mirrors the W3C `RTCIceServer` dictionary.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IceServer {
+    pub urls: Vec<String>,
+    pub username: Option<String>,
+    pub credential: Option<String>,
+    pub credential_type: IceCredentialType,
+}
+
+impl IceServer {
+    pub fn new<T: Into<Vec<String>>>(urls: T) -> Self {
+        Self {
+            urls: urls.into(),
+            username: None,
+            credential: None,
+            credential_type: IceCredentialType::default(),
+        }
+    }
+
+    pub fn with_credential(
+        mut self,
+        username: impl Into<String>,
+        credential: impl Into<String>,
+    ) -> Self {
+        self.username = Some(username.into());
+        self.credential = Some(credential.into());
+        self
+    }
+
+    pub fn credential_type(mut self, kind: IceCredentialType) -> Self {
+        self.credential_type = kind;
+        self
+    }
+}
+
+impl Default for IceServer {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum IceTransportPolicy {
+    #[default]
+    All,
+    Relay,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum BundlePolicy {
+    #[default]
+    Balanced,
+    MaxCompat,
+    MaxBundle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum RtcpMuxPolicy {
+    #[default]
+    Require,
+    Negotiate,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum TransportMode {
+    #[default]
+    WebRtc,
+    Srtp,
+    Rtp,
+}
+
+/// Tracks user-supplied certificate material.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct CertificateConfig {
+    pub pem_chain: Vec<String>,
+    pub private_key_pem: Option<String>,
+}
+
+/// Configuration for audio/video codecs and parameters.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AudioCapability {
+    pub payload_type: u8,
+    pub codec_name: String,
+    pub clock_rate: u32,
+    pub channels: u8,
+    pub fmtp: Option<String>,
+}
+
+impl Default for AudioCapability {
+    fn default() -> Self {
+        Self {
+            payload_type: 111,
+            codec_name: "opus".to_string(),
+            clock_rate: 48000,
+            channels: 2,
+            fmtp: Some("minptime=10;useinbandfec=1".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoCapability {
+    pub payload_type: u8,
+    pub codec_name: String,
+    pub clock_rate: u32,
+    pub rtcp_fbs: Vec<String>,
+}
+
+impl Default for VideoCapability {
+    fn default() -> Self {
+        Self {
+            payload_type: 96,
+            codec_name: "VP8".to_string(),
+            clock_rate: 90000,
+            rtcp_fbs: vec!["nack pli".to_string(), "transport-cc".to_string()],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApplicationCapability {
+    pub sctp_port: u16,
+}
+
+impl Default for ApplicationCapability {
+    fn default() -> Self {
+        Self { sctp_port: 5000 }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct MediaCapabilities {
+    pub audio: Vec<AudioCapability>,
+    pub video: Vec<VideoCapability>,
+    pub application: Option<ApplicationCapability>,
+}
+
+/// Primary configuration for a `PeerConnection`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct RtcConfiguration {
+    pub ice_servers: Vec<IceServer>,
+    pub ice_transport_policy: IceTransportPolicy,
+    pub bundle_policy: BundlePolicy,
+    pub rtcp_mux_policy: RtcpMuxPolicy,
+    pub certificates: Vec<CertificateConfig>,
+    pub transport_mode: TransportMode,
+    pub media_capabilities: Option<MediaCapabilities>,
+    pub disable_ipv6: bool,
+}
+
+pub struct RtcConfigurationBuilder {
+    inner: RtcConfiguration,
+}
+
+impl Default for RtcConfigurationBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RtcConfigurationBuilder {
+    pub fn new() -> Self {
+        Self {
+            inner: RtcConfiguration::default(),
+        }
+    }
+
+    pub fn ice_server(mut self, server: IceServer) -> Self {
+        self.inner.ice_servers.push(server);
+        self
+    }
+
+    pub fn ice_transport_policy(mut self, policy: IceTransportPolicy) -> Self {
+        self.inner.ice_transport_policy = policy;
+        self
+    }
+
+    pub fn bundle_policy(mut self, policy: BundlePolicy) -> Self {
+        self.inner.bundle_policy = policy;
+        self
+    }
+
+    pub fn rtcp_mux_policy(mut self, policy: RtcpMuxPolicy) -> Self {
+        self.inner.rtcp_mux_policy = policy;
+        self
+    }
+
+    pub fn certificate(mut self, cert: CertificateConfig) -> Self {
+        self.inner.certificates.push(cert);
+        self
+    }
+
+    pub fn transport_mode(mut self, mode: TransportMode) -> Self {
+        self.inner.transport_mode = mode;
+        self
+    }
+
+    pub fn media_capabilities(mut self, capabilities: MediaCapabilities) -> Self {
+        self.inner.media_capabilities = Some(capabilities);
+        self
+    }
+
+    pub fn disable_ipv6(mut self, disable: bool) -> Self {
+        self.inner.disable_ipv6 = disable;
+        self
+    }
+
+    pub fn build(self) -> RtcConfiguration {
+        self.inner
+    }
+}
+
+impl From<RtcConfigurationBuilder> for RtcConfiguration {
+    fn from(builder: RtcConfigurationBuilder) -> Self {
+        builder.build()
+    }
+}

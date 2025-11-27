@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>RustRTC Echo</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            padding: 20px;
+        }
+
+        #log {
+            background: #f0f0f0;
+            padding: 10px;
+            border: 1px solid #ccc;
+            height: 300px;
+            overflow-y: scroll;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>RustRTC Echo Demo</h1>
+    <div>
+        <button onclick="start()" id="startBtn">Start Connection</button>
+    </div>
+    <div style="margin-top: 10px;">
+        <input type="text" id="msgInput" placeholder="Type a message..." disabled>
+        <button onclick="sendMsg()" id="sendBtn" disabled>Send</button>
+    </div>
+    <div style="margin-top: 10px; padding: 5px; background: #e0e0e0;">
+        <strong>ICE Connection State:</strong> <span id="iceState">new</span> |
+        <strong>ICE Gathering State:</strong> <span id="gatherState">new</span> |
+        <strong>Signaling State:</strong> <span id="signalingState">stable</span>
+    </div>
+    <div style="display: flex; margin-top: 10px;">
+        <div style="margin-right: 10px;">
+            <h3>Local Video</h3>
+            <video id="localVideo" autoplay playsinline muted
+                style="width: 320px; height: 240px; background: black;"></video>
+        </div>
+        <div>
+            <h3>Remote Video</h3>
+            <video id="remoteVideo" autoplay playsinline
+                style="width: 320px; height: 240px; background: black;"></video>
+        </div>
+    </div>
+    <div id="log" style="margin-top: 10px;"></div>
+
+    <script>
+        let dataChannel = null;
+
+        async function start() {
+            document.getElementById('startBtn').disabled = true;
+            const pc = new RTCPeerConnection({
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            });
+
+            const log = (msg) => {
+                const el = document.getElementById('log');
+                el.innerHTML += msg + '<br>';
+                el.scrollTop = el.scrollHeight;
+                console.log(msg);
+            };
+
+            const updateState = () => {
+                document.getElementById('iceState').textContent = pc.iceConnectionState;
+                document.getElementById('gatherState').textContent = pc.iceGatheringState;
+                document.getElementById('signalingState').textContent = pc.signalingState;
+            };
+
+            pc.oniceconnectionstatechange = () => {
+                log("ICE Connection State: " + pc.iceConnectionState);
+                updateState();
+            };
+
+            pc.onicegatheringstatechange = () => {
+                log("ICE Gathering State: " + pc.iceGatheringState);
+                updateState();
+            };
+
+            pc.onsignalingstatechange = () => {
+                log("Signaling State: " + pc.signalingState);
+                updateState();
+            };
+
+            pc.ontrack = (e) => {
+                log("Received remote track: " + e.track.kind);
+                if (e.track.kind === 'video') {
+                    document.getElementById('remoteVideo').srcObject = e.streams[0];
+                }
+            };
+
+            // Get local media
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                document.getElementById('localVideo').srcObject = stream;
+                stream.getTracks().forEach(track => pc.addTrack(track, stream));
+                log("Added local video track");
+            } catch (e) {
+                log("Could not get local video: " + e);
+            }
+
+            // Create negotiated data channel
+            const dc = pc.createDataChannel("echo", { negotiated: true, id: 0 });
+            dataChannel = dc;
+
+            dc.onopen = () => {
+                log("DataChannel open");
+                document.getElementById('msgInput').disabled = false;
+                document.getElementById('sendBtn').disabled = false;
+                document.getElementById('msgInput').focus();
+            };
+
+            dc.onmessage = (e) => {
+                log("Received: " + e.data);
+            };
+
+            pc.onicecandidate = (e) => {
+                // We are using non-trickle for simplicity in this demo
+            };
+
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            log("Gathering candidates...");
+            // Wait for ICE gathering to complete
+            await new Promise(resolve => {
+                if (pc.iceGatheringState === 'complete') {
+                    resolve();
+                } else {
+                    const check = () => {
+                        if (pc.iceGatheringState === 'complete') {
+                            pc.removeEventListener('icegatheringstatechange', check);
+                            resolve();
+                        }
+                    };
+                    pc.addEventListener('icegatheringstatechange', check);
+                }
+            });
+            log("Gathering complete. Sending offer...");
+
+            // Update local description with gathered candidates
+            const offerSdp = pc.localDescription.sdp;
+
+            const response = await fetch('/offer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sdp: offerSdp,
+                    type: pc.localDescription.type
+                })
+            });
+
+            const answer = await response.json();
+            log("Received answer");
+            await pc.setRemoteDescription(new RTCSessionDescription({
+                type: answer.type,
+                sdp: answer.sdp
+            }));
+        }
+
+        function sendMsg() {
+            const input = document.getElementById('msgInput');
+            const msg = input.value;
+            if (dataChannel && dataChannel.readyState === 'open' && msg) {
+                const log = (msg) => {
+                    const el = document.getElementById('log');
+                    el.innerHTML += msg + '<br>';
+                    el.scrollTop = el.scrollHeight;
+                    console.log(msg);
+                };
+                log("Sending: " + msg);
+                dataChannel.send(msg);
+                input.value = '';
+            }
+        }
+
+        // Allow sending with Enter key
+        document.getElementById('msgInput').addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') {
+                sendMsg();
+            }
+        });
+    </script>
+</body>
+
+</html>

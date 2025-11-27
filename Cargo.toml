@@ -1,0 +1,49 @@
+[package]
+name = "rustrtc"
+version = "0.1.1"
+edition = "2024"
+authors = ["jinti<shenjindi@fourz.cn>"]
+repository = "https://github.com/restsend/rustrtc"
+description = "A pure Rust implementation of WebRTC"
+readme = "README.md"
+keywords = ["rtp", "srtp", "webrtc"]
+categories = ["network-programming"]
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "sync",
+    "time",
+    "net",
+    "io-util",
+] }
+tracing = "0.1.41"
+async-trait = "0.1"
+bytes = { version = "1", features = ["serde"] }
+aes = "0.8"
+ctr = "0.9"
+hmac = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
+rcgen = "0.14.5"
+md5 = { package = "md-5", version = "0.10" }
+p256 = { version = "0.13.2", features = ["ecdh", "std", "ecdsa", "pkcs8"] }
+aes-gcm = { version = "0.10.3", features = ["std"] }
+rand_core = { version = "=0.6.4", features = ["std"] }
+crc32c = "0.6"
+
+[dev-dependencies]
+axum = { version = "0.8", features = ["multipart"] }
+tower = { version = "0.5", features = ["util", "timeout"] }
+tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
+turn = "0.11.0"
+webrtc = "0.14.0"
+webrtc-util = "0.12.0"
+env_logger = "0.11.8"
+dtls = "0.13.0"
