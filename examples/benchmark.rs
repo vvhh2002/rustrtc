@@ -79,6 +79,9 @@ async fn main() {
         let exe = env::current_exe().expect("Failed to get current executable path");
         let mut results = Vec::new();
 
+        println!("\nPausing for 3 seconds...");
+        sleep(Duration::from_secs(3)).await;
+        
         // Run webrtc in subprocess
         println!("\nRunning webrtc benchmark...");
         let webrtc_output = Command::new(&exe)

@@ -1,38 +1,67 @@
 # rustrtc
 
-A pure Rust implementation of WebRTC. 
+A high-performance implementation of WebRTC. 
 
 ## Features
 
-- **PeerConnection**: The main entry point for WebRTC connections.
-- **Data Channels**: Support for reliable and unreliable data channels.
-- **Media Support**: RTP/SRTP handling for audio and video.
-- **ICE/STUN**: Interactive Connectivity Establishment and STUN protocol support.
-- **DTLS**: Datagram Transport Layer Security for secure communication.
-- **SDP**: Session Description Protocol parsing and generation.
+- **🚀High performance:** ~64% faster than `pion` (go version).
+- **🍡WebRTC Compliant**: Full compliance with webrtc/chrome.
+- **📺Media Support**: RTP/SRTP handling for audio and video.
+- **👌ICE/STUN**: Interactive Connectivity Establishment and STUN protocol support.
 
-## Performance (vs webrtc-rs & pion)
-> From Apple M4 machine result
+## Benchmark game (rustrtc vs webrtc-rs & pion)
+
+**CPU:**  `AMD Ryzen 7 5700X 8-Core Processor`   
+**OS** `5.15.0-118-generic #128-Ubuntu`  
+**Compiler** `rustc 1.91.0 (f8297e351 2025-10-28)`,  `go version go1.23.0 linux/amd64`   
 
 ```shell
-mpi@mpis-MacBook-Air rustrtc % cargo build --release --example benchmark && ./target/release/examples/benchmark
+nice@miuda.ai rustrtc % cargo run -r --example benchmark
 
 Comparison (Baseline: webrtc)
 Metric               | webrtc     | rustrtc    | pion      
 --------------------------------------------------------------------------------
-Duration (s)         | 10.02      | 10.02      | 11.02     
-Setup Latency (ms)   | 1.14       | 0.69       | 1.80      
-Throughput (MB/s)    | 135.45     | 213.38     | 177.92    
-Msg Rate (msg/s)     | 138696.71  | 218497.60  | 182190.56 
-CPU Usage (%)        | 820.38     | 829.33     | 596.12    
-Memory (MB)          | 28.00      | 10.00      | 41.00     
+Duration (s)         | 10.22      | 10.00      | 10.61     
+Setup Latency (ms)   | 0.57       | 0.13       | 0.50      
+Throughput (MB/s)    | 257.92     | 493.28     | 299.89    
+Msg Rate (msg/s)     | 264113.80  | 505122.00  | 307082.19 
+CPU Usage (%)        | 1555.80    | 1331.10    | 1157.17   
+Memory (MB)          | 30.00      | 10.00      | 47.00     
 --------------------------------------------------------------------------------
+
+Performance Charts
+==================
+
+Throughput (MB/s) (Higher is better)
+webrtc     | ████████████████████                     257.92
+rustrtc    | ████████████████████████████████████████ 493.28
+pion       | ████████████████████████                 299.89
+
+Message Rate (msg/s) (Higher is better)
+webrtc     | ████████████████████                     264113.80
+rustrtc    | ████████████████████████████████████████ 505122.00
+pion       | ████████████████████████                 307082.19
+
+Setup Latency (ms) (Lower is better)
+webrtc     | ████████████████████████████████████████ 0.57
+rustrtc    | █████████                                0.13
+pion       | ███████████████████████████████████      0.50
+
+CPU Usage (%) (Lower is better)
+webrtc     | ████████████████████████████████████████ 1555.80
+rustrtc    | ██████████████████████████████████       1331.10
+pion       | █████████████████████████████            1157.17
+
+Memory (MB) (Lower is better)
+webrtc     | █████████████████████████                30.00
+rustrtc    | ████████                                 10.00
+pion       | ████████████████████████████████████████ 47.00
 ```
 
 **Key Findings:**
-- **Throughput**: `rustrtc` is ~57% faster than `webrtc-rs` and ~20% faster than `pion`.
-- **Memory**: `rustrtc` uses ~64% less memory than `webrtc-rs` and ~75% less than `pion`.
-- **Setup Latency**: Significantly faster connection setup (0.69ms vs 1.14ms/1.80ms).
+- **Throughput**: `rustrtc` is ~91% faster than `webrtc-rs` and ~64% faster than `pion`.
+- **Memory**: `rustrtc` uses ~67% less memory than `webrtc-rs` and ~79% less than `pion`.
+- **Setup Latency**: Significantly faster connection setup (0.13ms vs 0.57ms/0.50ms).
 
 
 ## Usage
