@@ -11,7 +11,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use tokio::sync::{Mutex, broadcast, mpsc};
-use tracing::warn;
+use tracing::{debug, warn};
 
 #[derive(Debug, Clone)]
 pub enum FeedbackEvent {
@@ -234,7 +234,7 @@ impl RelayInner {
                                     let _ = this.sender.send(RelayEvent::Sample(sample));
                                 }
                                 Err(MediaError::Lagged) => {
-                                    warn!(target: "rustrtc::media", track = %this.base_id, "source track lagged; dropping sample");
+                                    debug!(target: "rustrtc::media", track = %this.base_id, "source track lagged; dropping sample");
                                     continue;
                                 }
                                 Err(MediaError::KindMismatch { .. }) => {
@@ -254,7 +254,7 @@ impl RelayInner {
                             match event {
                                 FeedbackEvent::RequestKeyFrame => {
                                     if let Err(e) = this.track.request_key_frame().await {
-                                        warn!(target: "rustrtc::media", track = %this.base_id, "failed to forward key frame request: {}", e);
+                                        debug!(target: "rustrtc::media", track = %this.base_id, "failed to forward key frame request: {}", e);
                                     }
                                 }
                             }

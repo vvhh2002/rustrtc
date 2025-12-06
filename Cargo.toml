@@ -1,10 +1,10 @@
 [package]
 name = "rustrtc"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
 authors = ["jinti<shenjindi@fourz.cn>"]
 repository = "https://github.com/restsend/rustrtc"
-description = "A pure Rust implementation of WebRTC"
+description = "A high-performance implementation of WebRTC"
 readme = "README.md"
 keywords = ["rtp", "srtp", "webrtc"]
 categories = ["network-programming"]

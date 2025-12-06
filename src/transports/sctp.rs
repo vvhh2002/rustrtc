@@ -2,10 +2,11 @@ use crate::transports::dtls::{DtlsState, DtlsTransport};
 use crate::transports::ice::stun::random_u32;
 use anyhow::Result;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use std::collections::{BTreeMap, HashSet};
 use std::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::{Mutex as TokioMutex, mpsc};
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 // DCEP Constants
 const DATA_CHANNEL_PPID_DCEP: u32 = 50;
@@ -132,6 +133,8 @@ pub struct DataChannel {
     pub next_ssn: AtomicU16,
     tx: Mutex<Option<mpsc::UnboundedSender<DataChannelEvent>>>,
     rx: TokioMutex<mpsc::UnboundedReceiver<DataChannelEvent>>,
+    reassembly_buffer: Mutex<Vec<u8>>,
+    pub(crate) send_lock: TokioMutex<()>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,6 +193,8 @@ struct SctpInner {
     new_data_channel_tx: Option<mpsc::UnboundedSender<Arc<DataChannel>>>,
     sack_counter: AtomicU8,
     is_client: bool,
+    sent_queue: Mutex<BTreeMap<u32, Bytes>>,
+    received_queue: Mutex<BTreeMap<u32, (u8, Bytes)>>,
 }
 
 struct SctpCleanupGuard<'a> {
@@ -246,6 +251,8 @@ impl SctpTransport {
             new_data_channel_tx,
             sack_counter: AtomicU8::new(0),
             is_client,
+            sent_queue: Mutex::new(BTreeMap::new()),
+            received_queue: Mutex::new(BTreeMap::new()),
         });
 
         let close_tx = Arc::new(tokio::sync::Notify::new());
@@ -289,6 +296,7 @@ impl SctpInner {
         close_rx: Arc<tokio::sync::Notify>,
         mut incoming_data_rx: mpsc::Receiver<Bytes>,
     ) {
+        debug!("SctpTransport run_loop started");
         *self.state.lock().unwrap() = SctpState::Connecting;
 
         // Guard to ensure cleanup happens on drop (cancellation)
@@ -299,6 +307,7 @@ impl SctpInner {
         loop {
             let state = dtls_state_rx.borrow_and_update().clone();
             if let DtlsState::Connected(_, _) = state {
+                debug!("SCTP: DTLS connected, starting SCTP");
                 break;
             }
             if let DtlsState::Failed | DtlsState::Closed = state {
@@ -318,7 +327,10 @@ impl SctpInner {
 
         loop {
             tokio::select! {
-                _ = close_rx.notified() => break,
+                _ = close_rx.notified() => {
+                    debug!("SctpTransport run_loop exiting (closed)");
+                    break;
+                },
                 res = incoming_data_rx.recv() => {
                     match res {
                         Some(packet) => {
@@ -334,6 +346,7 @@ impl SctpInner {
                 }
             }
         }
+        info!("SctpTransport run_loop finished");
     }
 
     async fn send_init(&self) -> Result<()> {
@@ -384,8 +397,6 @@ impl SctpInner {
             let chunk_type = buf.get_u8();
             let chunk_flags = buf.get_u8();
             let chunk_length = buf.get_u16() as usize;
-
-            // println!("SCTP Chunk: type={} len={}", chunk_type, chunk_length);
 
             if chunk_length < CHUNK_HEADER_SIZE
                 || buf.remaining() < chunk_length - CHUNK_HEADER_SIZE
@@ -553,8 +564,68 @@ impl SctpInner {
         Ok(())
     }
 
-    async fn handle_sack(&self, _chunk: Bytes) -> Result<()> {
-        // TODO: Handle SACK for retransmission
+    async fn handle_sack(&self, chunk: Bytes) -> Result<()> {
+        // Parse SACK to see if we are losing packets
+        if chunk.len() >= 12 {
+            let mut buf = chunk.clone();
+            let cumulative_tsn_ack = buf.get_u32();
+            let _a_rwnd = buf.get_u32();
+            let num_gap_ack_blocks = buf.get_u16();
+            let _num_duplicate_tsns = buf.get_u16();
+
+            // 1. Remove acknowledged packets
+            {
+                let mut sent_queue = self.sent_queue.lock().unwrap();
+                // split_off returns keys >= cumulative_tsn_ack + 1.
+                // So we keep the remaining (unacked) part.
+                let remaining = sent_queue.split_off(&(cumulative_tsn_ack + 1));
+                *sent_queue = remaining;
+            }
+
+            if num_gap_ack_blocks > 0 {
+                let mut max_sack_tsn = cumulative_tsn_ack;
+                let mut received_tsns = HashSet::new();
+
+                for _ in 0..num_gap_ack_blocks {
+                    if buf.remaining() < 4 {
+                        break;
+                    }
+                    let start = buf.get_u16();
+                    let end = buf.get_u16();
+                    let block_start = cumulative_tsn_ack.wrapping_add(start as u32);
+                    let block_end = cumulative_tsn_ack.wrapping_add(end as u32);
+
+                    // Handle wrapping if necessary, though simple addition usually works for u32 unless we are at boundary
+                    // For simplicity assuming no wrap-around issues for now or that wrapping_add handles it correctly for equality checks if we cast properly.
+                    // But BTreeMap keys are ordered. Wrapping might break order.
+                    // SCTP TSN is u32.
+
+                    if block_end > max_sack_tsn {
+                        max_sack_tsn = block_end;
+                    }
+
+                    for tsn in block_start..=block_end {
+                        received_tsns.insert(tsn);
+                    }
+                }
+
+                let mut to_retransmit = Vec::new();
+                {
+                    let sent_queue = self.sent_queue.lock().unwrap();
+                    for (&tsn, data) in sent_queue.iter() {
+                        if tsn <= max_sack_tsn && !received_tsns.contains(&tsn) {
+                            to_retransmit.push((tsn, data.clone()));
+                        }
+                    }
+                }
+
+                for (tsn, data) in to_retransmit {
+                    if let Err(e) = self.dtls_transport.send(data).await {
+                        warn!("Failed to retransmit TSN {}: {}", tsn, e);
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -606,47 +677,85 @@ impl SctpInner {
         Ok(())
     }
 
-    async fn handle_data(&self, _flags: u8, chunk: Bytes) -> Result<()> {
-        let mut buf = chunk;
+    async fn handle_data(&self, flags: u8, chunk: Bytes) -> Result<()> {
+        let mut buf = chunk.clone();
         if buf.remaining() < 12 {
             return Ok(());
         }
         let tsn = buf.get_u32();
-        let stream_id = buf.get_u16();
-        let _stream_seq = buf.get_u16();
-        let payload_proto = buf.get_u32();
-
-        let user_data = buf;
 
         // Deduplication and Ordering Check
         let cumulative_ack = self.cumulative_tsn_ack.load(Ordering::SeqCst);
         let diff = tsn.wrapping_sub(cumulative_ack);
 
-        let should_drop = if diff == 0 || diff > 0x80000000 {
+        if diff == 0 || diff > 0x80000000 {
             // Duplicate or Old
-            true
-        } else if diff == 1 {
-            // Next in sequence
-            self.cumulative_tsn_ack.store(tsn, Ordering::SeqCst);
-            false
-        } else {
-            // Gap
-            true
-        };
-
-        if should_drop {
             let ack = self.cumulative_tsn_ack.load(Ordering::SeqCst);
             self.send_sack(ack).await?;
             return Ok(());
         }
 
-        // Send SACK (Delayed Ack: every 2 packets)
-        let count = self.sack_counter.fetch_add(1, Ordering::Relaxed);
-        if count >= 1 {
-            self.sack_counter.store(0, Ordering::Relaxed);
-            let ack = self.cumulative_tsn_ack.load(Ordering::SeqCst);
-            self.send_sack(ack).await?;
+        // Store in received_queue
+        {
+            let mut received_queue = self.received_queue.lock().unwrap();
+            if received_queue.contains_key(&tsn) {
+                debug!("Dropping duplicate buffered packet TSN={}", tsn);
+            } else {
+                received_queue.insert(tsn, (flags, chunk));
+            }
         }
+
+        // Process packets in order
+        loop {
+            let next_tsn = self
+                .cumulative_tsn_ack
+                .load(Ordering::SeqCst)
+                .wrapping_add(1);
+
+            let packet_entry = {
+                let mut received_queue = self.received_queue.lock().unwrap();
+                received_queue.remove(&next_tsn)
+            };
+
+            if let Some((p_flags, p_chunk)) = packet_entry {
+                // Process this packet
+                self.process_data_payload(p_flags, p_chunk).await?;
+                self.cumulative_tsn_ack.store(next_tsn, Ordering::SeqCst);
+            } else {
+                break;
+            }
+        }
+
+        let ack = self.cumulative_tsn_ack.load(Ordering::SeqCst);
+
+        // Check if we have a gap
+        let has_gap = !self.received_queue.lock().unwrap().is_empty();
+
+        if has_gap {
+            warn!("Gap detected! Cumulative ACK: {}. Sending SACK.", ack);
+            self.send_sack(ack).await?;
+        } else {
+            // Delayed Ack logic
+            let count = self.sack_counter.fetch_add(1, Ordering::Relaxed);
+            if count >= 1 {
+                self.sack_counter.store(0, Ordering::Relaxed);
+                self.send_sack(ack).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn process_data_payload(&self, flags: u8, chunk: Bytes) -> Result<()> {
+        let mut buf = chunk;
+        // Skip TSN (4 bytes)
+        buf.advance(4);
+
+        let stream_id = buf.get_u16();
+        let _stream_seq = buf.get_u16();
+        let payload_proto = buf.get_u32();
+
+        let user_data = buf;
 
         if payload_proto == DATA_CHANNEL_PPID_DCEP {
             self.handle_dcep(stream_id, user_data).await?;
@@ -661,7 +770,29 @@ impl SctpInner {
         };
 
         if let Some(dc) = found_dc {
-            dc.send_event(DataChannelEvent::Message(user_data));
+            // Handle fragmentation
+            // B bit: 0x02, E bit: 0x01
+            let b_bit = (flags & 0x02) != 0;
+            let e_bit = (flags & 0x01) != 0;
+
+            let mut buffer = dc.reassembly_buffer.lock().unwrap();
+            if b_bit {
+                if !buffer.is_empty() {
+                    warn!(
+                        "SCTP Reassembly: unexpected B bit, clearing buffer of size {}",
+                        buffer.len()
+                    );
+                }
+                buffer.clear();
+            }
+            buffer.extend_from_slice(&user_data);
+            if e_bit {
+                let msg = Bytes::from(buffer.clone());
+                buffer.clear();
+                dc.send_event(DataChannelEvent::Message(msg));
+            }
+        } else {
+            warn!("SCTP: Received data for unknown stream id {}", stream_id);
         }
 
         Ok(())
@@ -835,6 +966,63 @@ impl SctpInner {
     }
 
     pub async fn send_data_raw(&self, channel_id: u16, ppid: u32, data: &[u8]) -> Result<()> {
+        let dc_opt = {
+            let channels = self.data_channels.lock().unwrap();
+            channels
+                .iter()
+                .find_map(|weak_dc| weak_dc.upgrade().filter(|dc| dc.id == channel_id))
+        };
+
+        let (_guard, ssn) = if let Some(dc) = &dc_opt {
+            let guard = dc.send_lock.lock().await;
+            let ssn = dc.next_ssn.fetch_add(1, Ordering::SeqCst);
+            (Some(guard), ssn)
+        } else {
+            (None, 0)
+        };
+
+        let max_payload_size = 900; // Safe limit for MTU ~1200
+        let total_len = data.len();
+
+        if total_len == 0 {
+            // Send empty packet (unfragmented)
+            return self.send_fragment(channel_id, ppid, data, ssn, 0x03).await;
+        }
+
+        let mut offset = 0;
+        while offset < total_len {
+            let remaining = total_len - offset;
+            let chunk_size = std::cmp::min(remaining, max_payload_size);
+            let chunk_data = &data[offset..offset + chunk_size];
+
+            let flags = if offset == 0 {
+                if remaining <= max_payload_size {
+                    0x03 // B=1, E=1 (Unfragmented)
+                } else {
+                    0x02 // B=1, E=0 (First)
+                }
+            } else if offset + chunk_size >= total_len {
+                0x01 // B=0, E=1 (Last)
+            } else {
+                0x00 // B=0, E=0 (Middle)
+            };
+
+            self.send_fragment(channel_id, ppid, chunk_data, ssn, flags)
+                .await?;
+            offset += chunk_size;
+        }
+
+        Ok(())
+    }
+
+    async fn send_fragment(
+        &self,
+        channel_id: u16,
+        ppid: u32,
+        data: &[u8],
+        ssn: u16,
+        flags: u8,
+    ) -> Result<()> {
         // Calculate total size
         // Common Header: 12
         // Chunk Header: 4
@@ -843,6 +1031,10 @@ impl SctpInner {
         // Padding: 0-3
 
         let data_len = data.len();
+        trace!(
+            "Sending fragment: len={}, flags={:#x}, ssn={}",
+            data_len, flags, ssn
+        );
         let chunk_value_len = 12 + data_len;
         let chunk_len = 4 + chunk_value_len;
         let padding = (4 - (chunk_len % 4)) % 4;
@@ -859,24 +1051,11 @@ impl SctpInner {
 
         // Chunk Header (DATA)
         buf.put_u8(CT_DATA);
-        buf.put_u8(0x03); // Flags: B|E
+        buf.put_u8(flags); // Flags
         buf.put_u16(chunk_len as u16);
 
         // DATA Chunk Value
         let tsn = self.next_tsn.fetch_add(1, Ordering::SeqCst);
-
-        let ssn = {
-            let channels = self.data_channels.lock().unwrap();
-            let found_dc = channels
-                .iter()
-                .find_map(|weak_dc| weak_dc.upgrade().filter(|dc| dc.id == channel_id));
-
-            if let Some(dc) = found_dc {
-                dc.next_ssn.fetch_add(1, Ordering::SeqCst)
-            } else {
-                0
-            }
-        };
 
         buf.put_u32(tsn);
         buf.put_u16(channel_id);
@@ -897,7 +1076,15 @@ impl SctpInner {
         buf[10] = checksum_bytes[2];
         buf[11] = checksum_bytes[3];
 
-        self.dtls_transport.send(buf.freeze()).await
+        let packet = buf.freeze();
+
+        // Store for retransmission
+        {
+            let mut queue = self.sent_queue.lock().unwrap();
+            queue.insert(tsn, packet.clone());
+        }
+
+        self.dtls_transport.send(packet).await
     }
 
     pub async fn send_dcep_open(&self, dc: &DataChannel) -> Result<()> {
@@ -976,6 +1163,8 @@ impl DataChannel {
             next_ssn: AtomicU16::new(0),
             tx: Mutex::new(Some(tx)),
             rx: TokioMutex::new(rx),
+            reassembly_buffer: Mutex::new(Vec::new()),
+            send_lock: TokioMutex::new(()),
         }
     }
 

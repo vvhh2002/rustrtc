@@ -60,7 +60,12 @@ async fn run_single_iteration() -> Option<u128> {
 
     // Add audio track
     let (_source, track, _) = sample_track(MediaKind::Audio, 100);
-    let _ = pc1.add_track(track);
+    let params = rustrtc::RtpCodecParameters {
+        payload_type: 111,
+        clock_rate: 48000,
+        channels: 2,
+    };
+    let _ = pc1.add_track(track, params);
 
     let _ = pc1.create_data_channel("bench", None);
 

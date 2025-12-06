@@ -51,6 +51,7 @@ impl IceConn {
             if remote.port() == 0 {
                 return Err(anyhow::anyhow!("Remote address not set"));
             }
+            // tracing::trace!("IceConn: sending {} bytes to {}", buf.len(), remote);
             socket.send_to(buf, remote).await
         } else {
             // Fallback: try to update if None
@@ -61,6 +62,7 @@ impl IceConn {
                 if remote.port() == 0 {
                     return Err(anyhow::anyhow!("Remote address not set"));
                 }
+                // tracing::trace!("IceConn: sending {} bytes to {}", buf.len(), remote);
                 socket.send_to(buf, remote).await
             } else {
                 tracing::warn!("IceConn: send failed - no selected socket");
@@ -115,7 +117,6 @@ impl PacketReceiver for IceConn {
         }
 
         let first_byte = packet[0];
-
         // Scope for read lock
         let current_remote = *self.remote_addr.read().unwrap();
 
@@ -151,6 +152,7 @@ impl PacketReceiver for IceConn {
             };
 
             if let Some(strong_rx) = receiver {
+                // tracing::trace!("IceConn: Forwarding DTLS packet to receiver");
                 strong_rx.receive(packet, addr).await;
             } else {
                 debug!("IceConn: Received DTLS packet but no receiver registered");
@@ -168,6 +170,11 @@ impl PacketReceiver for IceConn {
 
             if let Some(strong_rx) = receiver {
                 strong_rx.receive(packet, addr).await;
+            } else {
+                tracing::warn!(
+                    "IceConn: No RTP receiver registered for packet from {}",
+                    addr
+                );
             }
         }
     }

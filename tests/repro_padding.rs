@@ -34,12 +34,13 @@ async fn test_padding_packet_drop() -> Result<()> {
     let s1 = Arc::new(rustrtc::peer_connection::RtpSender::new(
         client_track,
         11111,
+        "stream".to_string(),
+        rustrtc::RtpCodecParameters {
+            payload_type: 96,
+            clock_rate: 90000,
+            channels: 0,
+        },
     ));
-    s1.set_params(rustrtc::peer_connection::RtpCodecParameters {
-        payload_type: 96,
-        clock_rate: 90000,
-        channels: 0,
-    });
     t1.set_sender(Some(s1.clone()));
 
     // 3. Negotiate
@@ -66,12 +67,13 @@ async fn test_padding_packet_drop() -> Result<()> {
     let s2 = Arc::new(rustrtc::peer_connection::RtpSender::new(
         outgoing_track,
         55555,
+        "stream".to_string(),
+        rustrtc::RtpCodecParameters {
+            payload_type: 96,
+            clock_rate: 90000,
+            channels: 0,
+        },
     ));
-    s2.set_params(rustrtc::peer_connection::RtpCodecParameters {
-        payload_type: 96,
-        clock_rate: 90000,
-        channels: 0,
-    });
     t2.set_sender(Some(s2));
 
     // PC2 Create Answer

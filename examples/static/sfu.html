@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RustRTC Video SFU</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            padding: 20px;
+            display: flex;
+            height: 100vh;
+            box-sizing: border-box;
+        }
+
+        .sidebar {
+            width: 300px;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid #ccc;
+            padding-right: 20px;
+            margin-right: 20px;
+        }
+
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #video-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 10px;
+            margin-bottom: 20px;
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .video-container {
+            position: relative;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            aspect-ratio: 16/9;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .video-label {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.5);
+            color: white;
+            padding: 2px 5px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        #chat-area {
+            border: 1px solid #ccc;
+            flex: 1;
+            overflow-y: scroll;
+            margin-bottom: 10px;
+            padding: 10px;
+        }
+
+        .controls {
+            margin-bottom: 10px;
+        }
+
+        .local-video {
+            border: 2px solid #4CAF50;
+        }
+
+        .media-controls {
+            margin-top: 10px;
+        }
+
+        .media-controls button {
+            margin-right: 5px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="sidebar">
+        <h1>RustRTC Video SFU</h1>
+
+        <div class="controls">
+            <label>User ID: <input type="text" id="userId" value="user1"
+                    style="width: 100%; margin-bottom: 5px;"></label>
+            <label>Room ID: <input type="text" id="roomId" value="room1"
+                    style="width: 100%; margin-bottom: 5px;"></label>
+            <button id="joinBtn" onclick="join()" style="width: 100%;">Join Room</button>
+        </div>
+
+        <div class="media-controls">
+            <button id="muteAudioBtn" onclick="toggleMuteAudio()" disabled>Mute Audio</button>
+            <button id="muteVideoBtn" onclick="toggleMuteVideo()" disabled>Mute Video</button>
+        </div>
+
+        <h3>Chat</h3>
+        <div id="chat-area"></div>
+
+        <div class="controls">
+            <input type="text" id="msgInput" placeholder="Type a message..." disabled
+                style="width: 100%; margin-bottom: 5px;">
+            <button id="sendBtn" onclick="sendMessage()" disabled style="width: 100%;">Send</button>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <div id="video-grid"></div>
+    </div>
+
+    <script>
+        let pc = null;
+        let dc = null;
+        let localStream = null;
+        let userIdEl = document.getElementById('userId');
+        const roomIdEl = document.getElementById('roomId');
+        userIdEl.value = `user${(Math.random() * 10000).toFixed(0)}`;
+
+        let log = msg => {
+            const chat = document.getElementById('chat-area');
+            chat.innerHTML += `<div>${msg}</div>`;
+            chat.scrollTop = chat.scrollHeight;
+            console.log(msg);
+        };
+
+        async function join() {
+            const userId = userIdEl.value;
+            const roomId = roomIdEl.value;
+
+            if (!userId || !roomId) {
+                alert("Please enter User ID and Room ID");
+                return;
+            }
+
+            document.getElementById('joinBtn').disabled = true;
+            userIdEl.disabled = true;
+            roomIdEl.disabled = true;
+
+            pc = new RTCPeerConnection({
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            });
+
+            // Handle incoming tracks (remote video)
+            pc.ontrack = event => {
+                console.log("Received track:", event.track.kind, event.track.id);
+                const stream = event.streams[0];
+                const streamId = stream.id; // This is the UserID from server
+
+                let container = document.getElementById(`container - ${streamId} `);
+                if (!container) {
+                    container = document.createElement('div');
+                    container.id = `container - ${streamId} `;
+                    container.className = 'video-container';
+
+                    const videoEl = document.createElement('video');
+                    videoEl.id = `video - ${streamId} `;
+                    videoEl.autoplay = true;
+                    videoEl.playsInline = true;
+                    // videoEl.controls = true;
+
+                    const label = document.createElement('div');
+                    label.className = 'video-label';
+                    label.innerText = streamId;
+
+                    container.appendChild(videoEl);
+                    container.appendChild(label);
+                    document.getElementById('video-grid').appendChild(container);
+                }
+
+                const videoEl = container.querySelector('video');
+                videoEl.srcObject = stream;
+            };
+
+            // Get Local Media
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+
+                // Show local video
+                const container = document.createElement('div');
+                container.className = 'video-container local-video';
+
+                const localVideo = document.createElement('video');
+                localVideo.srcObject = localStream;
+                localVideo.autoplay = true;
+                localVideo.muted = true; // Mute local video
+
+                const label = document.createElement('div');
+                label.className = 'video-label';
+                label.innerText = userId + " (Me)";
+
+                container.appendChild(localVideo);
+                container.appendChild(label);
+                document.getElementById('video-grid').appendChild(container);
+
+                // Add tracks to PC
+                localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+                document.getElementById('muteAudioBtn').disabled = false;
+                document.getElementById('muteVideoBtn').disabled = false;
+
+            } catch (e) {
+                log("Could not get camera/mic: " + e);
+            }
+
+            // Setup Data Channel
+            dc = pc.createDataChannel("chat");
+            setupDataChannel(dc);
+
+            // Also handle data channels created by server (if any)
+            pc.ondatachannel = e => setupDataChannel(e.channel);
+
+            // Start negotiation
+            await negotiate();
+        }
+
+        function setupDataChannel(channel) {
+            channel.onopen = () => {
+                log("Data Channel Open");
+                document.getElementById('msgInput').disabled = false;
+                document.getElementById('sendBtn').disabled = false;
+            };
+
+            channel.onmessage = async event => {
+                const msg = JSON.parse(event.data);
+                if (msg.type === 'chat') {
+                    log(`<b>${msg.from}:</b> ${msg.text}`);
+                } else if (msg.type === 'notification') {
+                    log(`<i>${msg.text}</i>`);
+                } else if (msg.type === 'sdp') {
+                    // Handle SDP from server (Renegotiation)
+                    const sdp = msg.sdp;
+                    if (sdp.type === 'offer') {
+                        await pc.setRemoteDescription(sdp);
+                        const answer = await pc.createAnswer();
+                        await pc.setLocalDescription(answer);
+
+                        const answerMsg = {
+                            type: 'sdp',
+                            sdp: pc.localDescription
+                        };
+                        dc.send(JSON.stringify(answerMsg));
+                    }
+                }
+            };
+        }
+
+        async function negotiate() {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            // Wait for ICE gathering to complete for simplicity
+            await new Promise(resolve => {
+                if (pc.iceGatheringState === 'complete') {
+                    resolve();
+                } else {
+                    const checkState = () => {
+                        if (pc.iceGatheringState === 'complete') {
+                            pc.removeEventListener('icegatheringstatechange', checkState);
+                            resolve();
+                        }
+                    };
+                    pc.addEventListener('icegatheringstatechange', checkState);
+                }
+            });
+
+            const payload = {
+                userId: userIdEl.value,
+                roomId: roomIdEl.value,
+                sdp: pc.localDescription
+            };
+
+            try {
+                const response = await fetch('/session', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) throw new Error("Failed to connect");
+
+                const answer = await response.json();
+                await pc.setRemoteDescription(answer);
+            } catch (e) {
+                log("Error connecting: " + e);
+            }
+        }
+
+        function sendMessage() {
+            const input = document.getElementById('msgInput');
+            const text = input.value;
+            if (!text || !dc) return;
+
+            const msg = {
+                type: "chat",
+                text: text
+            };
+            dc.send(JSON.stringify(msg));
+            log(`<b>Me:</b> ${text}`);
+            input.value = "";
+        }
+
+        function toggleMuteAudio() {
+            if (localStream) {
+                const audioTrack = localStream.getAudioTracks()[0];
+                if (audioTrack) {
+                    audioTrack.enabled = !audioTrack.enabled;
+                    document.getElementById('muteAudioBtn').innerText = audioTrack.enabled ? "Mute Audio" : "Unmute Audio";
+                }
+            }
+        }
+
+        function toggleMuteVideo() {
+            if (localStream) {
+                const videoTrack = localStream.getVideoTracks()[0];
+                if (videoTrack) {
+                    videoTrack.enabled = !videoTrack.enabled;
+                    document.getElementById('muteVideoBtn').innerText = videoTrack.enabled ? "Mute Video" : "Unmute Video";
+                }
+            }
+        }
+    </script>
+</body>
+
+</html>

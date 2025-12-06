@@ -17,10 +17,11 @@ pub struct RtpTransport {
     rtcp_listener: Mutex<Option<mpsc::Sender<Vec<RtcpPacket>>>>,
     rid_listeners: Mutex<HashMap<String, mpsc::Sender<RtpPacket>>>,
     rid_extension_id: Mutex<Option<u8>>,
+    srtp_required: bool,
 }
 
 impl RtpTransport {
-    pub fn new(transport: Arc<IceConn>) -> Self {
+    pub fn new(transport: Arc<IceConn>, srtp_required: bool) -> Self {
         Self {
             transport,
             srtp_session: Mutex::new(None),
@@ -28,6 +29,7 @@ impl RtpTransport {
             rtcp_listener: Mutex::new(None),
             rid_listeners: Mutex::new(HashMap::new()),
             rid_extension_id: Mutex::new(None),
+            srtp_required,
         }
     }
 
@@ -43,6 +45,11 @@ impl RtpTransport {
     pub fn register_listener_sync(&self, ssrc: u32, tx: mpsc::Sender<RtpPacket>) {
         let mut listeners = self.listeners.lock().unwrap();
         listeners.insert(ssrc, tx);
+    }
+
+    pub fn has_listener(&self, ssrc: u32) -> bool {
+        let listeners = self.listeners.lock().unwrap();
+        listeners.contains_key(&ssrc)
     }
 
     pub fn register_rid_listener(&self, rid: String, tx: mpsc::Sender<RtpPacket>) {
@@ -68,6 +75,9 @@ impl RtpTransport {
                 srtp.protect_rtp(&mut packet)?;
                 packet.marshal()?
             } else {
+                if self.srtp_required {
+                    return Err(anyhow::anyhow!("SRTP required but session not ready"));
+                }
                 buf.to_vec()
             }
         };
@@ -83,6 +93,9 @@ impl RtpTransport {
                 srtp.protect_rtp(&mut packet)?;
                 packet.marshal()?
             } else {
+                if self.srtp_required {
+                    return Err(anyhow::anyhow!("SRTP required but session not ready"));
+                }
                 packet.marshal()?
             }
         };
@@ -99,6 +112,10 @@ impl RtpTransport {
                 srtp.protect_rtcp(&mut buf)?;
                 buf
             } else {
+                if self.srtp_required {
+                    tracing::warn!("Failed to send PLI: SRTP required but session not ready");
+                    return Err(anyhow::anyhow!("SRTP required but session not ready"));
+                }
                 raw
             }
         };
@@ -130,22 +147,28 @@ impl PacketReceiver for RtpTransport {
                             Ok(_) => match rtp_packet.marshal() {
                                 Ok(b) => b,
                                 Err(e) => {
-                                    tracing::warn!("RTP marshal failed: {}", e);
+                                    tracing::debug!("RTP marshal failed: {}", e);
                                     return;
                                 }
                             },
-                            Err(e) => {
-                                tracing::warn!("SRTP unprotect RTP failed: {}", e);
+                            Err(_) => {
                                 return;
                             }
                         },
                         Err(e) => {
-                            tracing::warn!("RTP parse failed: {}", e);
+                            tracing::debug!("RTP parse failed: {}", e);
                             return;
                         }
                     }
                 }
             } else {
+                if self.srtp_required {
+                    // Drop packet
+                    tracing::debug!(
+                        "Dropping packet because SRTP is required but session is not ready"
+                    );
+                    return;
+                }
                 packet.to_vec()
             }
         };
@@ -164,7 +187,7 @@ impl PacketReceiver for RtpTransport {
                         }
                     }
                     Err(e) => {
-                        tracing::warn!("RTCP parse failed: {}", e);
+                        tracing::debug!("RTCP parse failed: {}", e);
                     }
                 }
             }
@@ -208,7 +231,7 @@ impl PacketReceiver for RtpTransport {
                             listeners.remove(&ssrc);
                         }
                     } else {
-                        tracing::warn!(
+                        tracing::debug!(
                             "No listener found for packet SSRC: {} PT: {}",
                             ssrc,
                             rtp_packet.header.payload_type
@@ -216,7 +239,7 @@ impl PacketReceiver for RtpTransport {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("RTP parse failed: {}", e);
+                    tracing::debug!("RTP parse failed: {}", e);
                 }
             }
         }

@@ -34,7 +34,12 @@ async fn main() {
     let pc = PeerConnection::new(config);
 
     let (sample_source, track, _) = rustrtc::media::sample_track(MediaKind::Video, 100);
-    pc.add_track(track).expect("failed to add track");
+    let params = rustrtc::RtpCodecParameters {
+        payload_type: 96,
+        clock_rate: 90000,
+        channels: 0,
+    };
+    pc.add_track(track, params).expect("failed to add track");
 
     let offer = pc.create_offer().await.expect("failed to create offer");
     pc.set_local_description(offer)

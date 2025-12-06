@@ -483,7 +483,12 @@ async fn run_rustrtc(count: usize) -> (f64, u64, u64) {
 
             // Add audio track
             let (_source, track, _) = sample_track(MediaKind::Audio, 100);
-            pc1.add_track(track).unwrap();
+            let params = rustrtc::RtpCodecParameters {
+                payload_type: 111,
+                clock_rate: 48000,
+                channels: 2,
+            };
+            pc1.add_track(track, params).unwrap();
 
             let dc1 = pc1.create_data_channel("bench", None).unwrap();
 

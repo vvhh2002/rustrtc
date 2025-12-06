@@ -30,7 +30,7 @@ use self::handshake::{
 };
 use self::record::{ContentType, DtlsRecord, ProtocolVersion};
 use crate::transports::ice::conn::IceConn;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, trace, warn};
 
 pub fn generate_certificate() -> Result<Certificate> {
     let cert = generate_simple_self_signed(vec!["localhost".to_string()])?;
@@ -393,8 +393,8 @@ impl DtlsInner {
             ) {
                 Ok(p) => Ok(p),
                 Err(e) => {
-                    debug!(
-                        "Decryption failed details: seq={} epoch={} type={:?} ver={:?} len={}",
+                    trace!(
+                        "Decryption failed details (crypto): seq={} epoch={} type={:?} ver={:?} len={}",
                         record.sequence_number,
                         record.epoch,
                         record.content_type,
@@ -510,7 +510,7 @@ impl DtlsInner {
                     }
 
                     if msg.message_seq > ctx.recv_message_seq {
-                        info!(
+                        debug!(
                             "Received out-of-order handshake message: got {}, expected {}",
                             msg.message_seq, ctx.recv_message_seq
                         );
@@ -1088,6 +1088,7 @@ impl DtlsInner {
                 } else {
                     if let Some(keys) = &ctx.session_keys {
                         let crypto = create_session_crypto(keys.clone())?;
+
                         let state = DtlsState::Connected(Arc::new(crypto), ctx.srtp_profile);
                         *self.state.write().await = state.clone();
                         self.write_epoch.store(ctx.epoch, Ordering::SeqCst);
@@ -1513,7 +1514,10 @@ impl DtlsInner {
                     self.handle_retransmit(&ctx, is_client).await;
                 }
                 Some(packet) = handshake_rx.recv() => {
-                    self.handle_incoming_packet(packet, &mut ctx, &incoming_data_tx, &certificate, is_client).await?;
+                    if let Err(e) = self.handle_incoming_packet(packet, &mut ctx, &incoming_data_tx, &certificate, is_client).await {
+                        warn!("DTLS handshake loop error in handle_incoming_packet: {}", e);
+                        return Err(e);
+                    }
                 }
             }
         }
@@ -1604,9 +1608,13 @@ use std::net::SocketAddr;
 #[async_trait::async_trait]
 impl PacketReceiver for DtlsTransport {
     async fn receive(&self, packet: Bytes, _addr: SocketAddr) {
+        trace!("DtlsTransport::receive len={}", packet.len());
         // Push to the internal handshake loop
         // We ignore errors here (e.g. if the loop is closed)
-        let _ = self.inner.handshake_rx_feeder.send(packet).await;
+        match self.inner.handshake_rx_feeder.send(packet).await {
+            Ok(_) => {}
+            Err(e) => warn!("DtlsTransport::receive failed to feed packet: {}", e),
+        }
     }
 }
 

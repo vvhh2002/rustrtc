@@ -741,6 +741,13 @@ async fn handle_packet(
                         addr, msg.error_code
                     );
                     if let Some(code) = msg.error_code {
+                        if code == 401 {
+                            let remote_params = inner.remote_parameters.lock().unwrap().clone();
+                            warn!(
+                                "STUN 401 received. Current remote params: {:?}",
+                                remote_params
+                            );
+                        }
                         trace!("Error code: {}", code);
                     }
                 }
@@ -1551,7 +1558,7 @@ impl IceGatherer {
         if candidates.iter().any(|c| c.address == candidate.address) {
             return;
         }
-        tracing::info!(
+        tracing::debug!(
             "Gathered local candidate: {} type={:?}",
             candidate.address,
             candidate.typ
