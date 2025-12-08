@@ -71,6 +71,7 @@ pub enum StunMethod {
     Binding,
     Allocate,
     CreatePermission,
+    ChannelBind,
     Send,
     Data,
 }
@@ -89,6 +90,7 @@ pub enum StunAttribute {
     UseCandidate,
     XorPeerAddress(SocketAddr),
     XorMappedAddress(SocketAddr),
+    ChannelNumber(u16),
     Data(Vec<u8>),
 }
 
@@ -117,6 +119,7 @@ fn encode_stun_message(
         StunMethod::Binding => 0x0001,
         StunMethod::Allocate => 0x0003,
         StunMethod::CreatePermission => 0x0008,
+        StunMethod::ChannelBind => 0x0009,
         StunMethod::Send => 0x0006,
         StunMethod::Data => 0x0007,
     };
@@ -209,6 +212,12 @@ fn append_attribute(buffer: &mut Vec<u8>, attr: &StunAttribute, tx_id: &[u8; 12]
             append_xor_address(buffer, 0x0020, addr, tx_id);
             return;
         }
+        StunAttribute::ChannelNumber(value) => {
+            buffer.extend_from_slice(&0x000Cu16.to_be_bytes());
+            buffer.extend_from_slice(&4u16.to_be_bytes());
+            buffer.extend_from_slice(&value.to_be_bytes());
+            buffer.extend_from_slice(&[0u8; 2]); // Padding
+        }
         StunAttribute::Data(value) => append_raw_attribute(buffer, 0x0013, value),
     }
     pad_four_bytes(buffer);
@@ -288,6 +297,7 @@ fn decode_stun_message(bytes: &[u8]) -> Result<StunDecoded> {
         0x0001 => StunMethod::Binding,
         0x0003 => StunMethod::Allocate,
         0x0008 => StunMethod::CreatePermission,
+        0x0009 => StunMethod::ChannelBind,
         0x0006 => StunMethod::Send,
         0x0007 => StunMethod::Data,
         _ => bail!("unsupported STUN method"),

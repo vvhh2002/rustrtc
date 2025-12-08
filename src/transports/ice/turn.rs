@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow, bail};
 use md5::{Digest as Md5Digest, Md5};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -42,6 +43,9 @@ impl TurnCredentials {
 pub struct TurnClient {
     transport: TurnTransport,
     auth: Mutex<Option<TurnAuthState>>,
+    channels: Mutex<HashMap<SocketAddr, u16>>,
+    channel_map: Mutex<HashMap<u16, SocketAddr>>,
+    next_channel: Mutex<u16>,
 }
 
 #[derive(Clone, Debug)]
@@ -103,6 +107,9 @@ impl TurnClient {
         Ok(Self {
             transport,
             auth: Mutex::new(None),
+            channels: Mutex::new(HashMap::new()),
+            channel_map: Mutex::new(HashMap::new()),
+            next_channel: Mutex::new(0x4000),
         })
     }
 
@@ -336,6 +343,78 @@ impl TurnClient {
         };
         let bytes = msg.encode(Some(&auth.key), true)?;
         Ok((bytes, tx_id))
+    }
+
+    pub(crate) async fn create_channel_bind_packet(
+        &self,
+        peer: SocketAddr,
+    ) -> Result<(Vec<u8>, [u8; 12], u16)> {
+        // Allocate new channel number
+        let channel_number = {
+            let mut next = self.next_channel.lock().await;
+            let n = *next;
+            if n >= 0x7FFF {
+                *next = 0x4000;
+            } else {
+                *next += 1;
+            }
+            n
+        };
+
+        let tx_id = random_bytes::<12>();
+        let auth_guard = self.auth.lock().await;
+        let auth = auth_guard.as_ref().ok_or_else(|| anyhow!("no auth"))?;
+
+        let attributes = vec![
+            StunAttribute::ChannelNumber(channel_number),
+            StunAttribute::XorPeerAddress(peer),
+            StunAttribute::Username(auth.username.clone()),
+            StunAttribute::Realm(auth.realm.clone()),
+            StunAttribute::Nonce(auth.nonce.clone()),
+        ];
+
+        let msg = StunMessage {
+            class: StunClass::Request,
+            method: StunMethod::ChannelBind,
+            transaction_id: tx_id,
+            attributes,
+        };
+        let bytes = msg.encode(Some(&auth.key), true)?;
+        Ok((bytes, tx_id, channel_number))
+    }
+
+    pub(crate) async fn add_channel(&self, peer: SocketAddr, channel: u16) {
+        let mut channels = self.channels.lock().await;
+        let mut channel_map = self.channel_map.lock().await;
+        channels.insert(peer, channel);
+        channel_map.insert(channel, peer);
+    }
+
+    pub(crate) async fn get_channel(&self, peer: SocketAddr) -> Option<u16> {
+        let channels = self.channels.lock().await;
+        channels.get(&peer).copied()
+    }
+
+    pub(crate) async fn get_peer(&self, channel: u16) -> Option<SocketAddr> {
+        let channel_map = self.channel_map.lock().await;
+        channel_map.get(&channel).copied()
+    }
+
+    pub(crate) async fn send_channel_data(&self, channel: u16, data: &[u8]) -> Result<()> {
+        // ChannelData:
+        // 0-1: Channel Number
+        // 2-3: Length
+        // 4-N: Data
+        // Padding to 4 bytes (UDP only? RFC says "The ChannelData message is not padded to a 4-byte boundary")
+        // Wait, RFC 5766 Section 11.5: "The ChannelData message is not padded to a 4-byte boundary"
+        // BUT, if using TCP, we need framing.
+        
+        let mut packet = Vec::with_capacity(4 + data.len());
+        packet.extend_from_slice(&channel.to_be_bytes());
+        packet.extend_from_slice(&(data.len() as u16).to_be_bytes());
+        packet.extend_from_slice(data);
+        
+        self.send(&packet).await
     }
 }
 

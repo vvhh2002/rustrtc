@@ -531,6 +531,27 @@ impl IceTransport {
         client: &Arc<TurnClient>,
         relayed_addr: SocketAddr,
     ) {
+        // Check for ChannelData (0x4000 - 0x7FFF)
+        if packet.len() >= 4 {
+            let channel_num = u16::from_be_bytes([packet[0], packet[1]]);
+            if channel_num >= 0x4000 && channel_num <= 0x7FFF {
+                let len = u16::from_be_bytes([packet[2], packet[3]]) as usize;
+                if packet.len() >= 4 + len {
+                    let data = &packet[4..4 + len];
+                    if let Some(peer_addr) = client.get_peer(channel_num).await {
+                        handle_packet(
+                            data,
+                            peer_addr,
+                            inner.clone(),
+                            IceSocketWrapper::Turn(client.clone(), relayed_addr),
+                        )
+                        .await;
+                    }
+                }
+                return;
+            }
+        }
+
         if let Ok(msg) = StunMessage::decode(packet) {
             if msg.class == StunClass::Indication && msg.method == StunMethod::Data {
                 if let Some(data) = &msg.data
@@ -976,6 +997,47 @@ async fn perform_binding_check(
             Ok(Ok(msg)) => {
                 if msg.class == StunClass::ErrorResponse {
                     bail!("CreatePermission failed: {:?}", msg.error_code);
+                }
+
+                // Try ChannelBind if not already bound
+                if client.get_channel(remote.address).await.is_none() {
+                    if let Ok((bind_bytes, bind_tx_id, channel_num)) =
+                        client.create_channel_bind_packet(remote.address).await
+                    {
+                        let (bind_tx, bind_rx) = oneshot::channel();
+                        {
+                            let mut map = inner.pending_transactions.lock().unwrap();
+                            map.insert(bind_tx_id, bind_tx);
+                        }
+
+                        if let Ok(_) = client.send(&bind_bytes).await {
+                            let client_clone = client.clone();
+                            let remote_addr = remote.address;
+                            let inner_weak = Arc::downgrade(&inner);
+                            let timeout_dur = inner.config.stun_timeout;
+
+                            tokio::spawn(async move {
+                                match timeout(timeout_dur, bind_rx).await {
+                                    Ok(Ok(msg)) => {
+                                        if msg.class == StunClass::SuccessResponse {
+                                            client_clone.add_channel(remote_addr, channel_num).await;
+                                            debug!(
+                                                "TURN ChannelBound: {} -> {}",
+                                                remote_addr, channel_num
+                                            );
+                                        }
+                                    }
+                                    _ => {
+                                        // Timeout or error
+                                        if let Some(inner) = inner_weak.upgrade() {
+                                            let mut map = inner.pending_transactions.lock().unwrap();
+                                            map.remove(&bind_tx_id);
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    }
                 }
             }
             _ => {
@@ -1704,7 +1766,11 @@ impl IceSocketWrapper {
         match self {
             IceSocketWrapper::Udp(s) => s.send_to(data, addr).await.map_err(|e| e.into()),
             IceSocketWrapper::Turn(c, _) => {
-                c.send_indication(addr, data).await?;
+                if let Some(channel) = c.get_channel(addr).await {
+                    c.send_channel_data(channel, data).await?;
+                } else {
+                    c.send_indication(addr, data).await?;
+                }
                 Ok(data.len())
             }
         }
