@@ -193,7 +193,6 @@ async fn run_client(addr_str: &str) {
         loop {
             sleep(Duration::from_millis(33)).await;
             let frame = VideoFrame {
-                timestamp: Duration::from_millis(0), // Dummy
                 data: bytes::Bytes::from_static(&[0u8; 100]),
                 ..Default::default()
             };

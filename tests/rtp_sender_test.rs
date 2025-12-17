@@ -110,8 +110,7 @@ mod tests {
         // Sample 1: TS 1000
         source
             .send_video(rustrtc::media::frame::VideoFrame {
-                timestamp: std::time::Duration::from_secs(0),
-                rtp_timestamp: Some(1000),
+                rtp_timestamp: 1000,
                 data: Bytes::from_static(&[1]),
                 ..rustrtc::media::frame::VideoFrame::default()
             })
@@ -125,8 +124,7 @@ mod tests {
         // Sample 2: TS 4000 (Delta 3000 - normal)
         source
             .send_video(rustrtc::media::frame::VideoFrame {
-                timestamp: std::time::Duration::from_secs(0),
-                rtp_timestamp: Some(4000),
+                rtp_timestamp: 4000,
                 data: Bytes::from_static(&[2]),
                 ..rustrtc::media::frame::VideoFrame::default()
             })
@@ -142,8 +140,7 @@ mod tests {
         // Sample 3: TS 1,000,000 (Large Jump - e.g. source switch)
         source
             .send_video(rustrtc::media::frame::VideoFrame {
-                timestamp: std::time::Duration::from_secs(0),
-                rtp_timestamp: Some(1_000_000),
+                rtp_timestamp: 1_000_000,
                 data: Bytes::from_static(&[3]),
                 ..rustrtc::media::frame::VideoFrame::default()
             })

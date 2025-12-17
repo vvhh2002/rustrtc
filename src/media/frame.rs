@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
@@ -33,8 +31,7 @@ pub enum VideoPixelFormat {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AudioFrame {
-    pub timestamp: Duration,
-    pub rtp_timestamp: Option<u32>,
+    pub rtp_timestamp: u32,
     pub sample_rate: u32,
     pub channels: u8,
     pub samples: u32,
@@ -47,8 +44,7 @@ pub struct AudioFrame {
 impl Default for AudioFrame {
     fn default() -> Self {
         Self {
-            timestamp: Duration::default(),
-            rtp_timestamp: None,
+            rtp_timestamp: 0,
             sample_rate: 48_000,
             channels: 2,
             samples: 0,
@@ -62,8 +58,7 @@ impl Default for AudioFrame {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VideoFrame {
-    pub timestamp: Duration,
-    pub rtp_timestamp: Option<u32>,
+    pub rtp_timestamp: u32,
     pub width: u16,
     pub height: u16,
     pub format: VideoPixelFormat,
@@ -79,8 +74,7 @@ pub struct VideoFrame {
 impl Default for VideoFrame {
     fn default() -> Self {
         Self {
-            timestamp: Duration::default(),
-            rtp_timestamp: None,
+            rtp_timestamp: 0,
             width: 0,
             height: 0,
             format: VideoPixelFormat::default(),
@@ -112,23 +106,12 @@ impl MediaSample {
     pub fn into_rtp_packet(
         self,
         ssrc: u32,
-        clock_rate: u32,
         default_payload_type: u8,
         sequence_number: &mut u16,
     ) -> RtpPacket {
-        let (
-            payload,
-            timestamp_duration,
-            marker,
-            rtp_timestamp,
-            csrcs,
-            frame_seq,
-            frame_pt,
-            extension,
-        ) = match self {
+        let (payload, marker, rtp_timestamp, csrcs, frame_seq, frame_pt, extension) = match self {
             MediaSample::Audio(f) => (
                 f.data,
-                f.timestamp,
                 false,
                 f.rtp_timestamp,
                 Vec::new(),
@@ -138,7 +121,6 @@ impl MediaSample {
             ),
             MediaSample::Video(f) => (
                 f.data,
-                f.timestamp,
                 f.is_last_packet,
                 f.rtp_timestamp,
                 f.csrcs,
@@ -148,16 +130,13 @@ impl MediaSample {
             ),
         };
 
-        let timestamp =
-            rtp_timestamp.unwrap_or((timestamp_duration.as_secs_f64() * clock_rate as f64) as u32);
-
         let seq = frame_seq.unwrap_or(*sequence_number);
         if frame_seq.is_none() {
             *sequence_number = sequence_number.wrapping_add(1);
         }
 
         let pt = frame_pt.unwrap_or(default_payload_type);
-        let mut header = RtpHeader::new(pt, seq, timestamp, ssrc);
+        let mut header = RtpHeader::new(pt, seq, rtp_timestamp, ssrc);
         header.marker = marker;
         header.csrcs = csrcs;
         header.extension = extension;
@@ -171,12 +150,6 @@ impl MediaSample {
         clock_rate: u32,
         channels: u8,
     ) -> Self {
-        let timestamp = if clock_rate > 0 {
-            std::time::Duration::from_secs_f64(packet.header.timestamp as f64 / clock_rate as f64)
-        } else {
-            std::time::Duration::ZERO
-        };
-
         let data = bytes::Bytes::from(packet.payload);
 
         match kind {
@@ -187,8 +160,7 @@ impl MediaSample {
                     0
                 };
                 MediaSample::Audio(AudioFrame {
-                    timestamp,
-                    rtp_timestamp: Some(packet.header.timestamp),
+                    rtp_timestamp: packet.header.timestamp,
                     sample_rate: clock_rate,
                     channels,
                     samples,
@@ -199,8 +171,7 @@ impl MediaSample {
                 })
             }
             MediaKind::Video => MediaSample::Video(VideoFrame {
-                timestamp,
-                rtp_timestamp: Some(packet.header.timestamp),
+                rtp_timestamp: packet.header.timestamp,
                 width: 0,
                 height: 0,
                 format: VideoPixelFormat::Unspecified,

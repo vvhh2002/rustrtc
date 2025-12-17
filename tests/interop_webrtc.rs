@@ -227,7 +227,7 @@ async fn interop_vp8_echo() -> Result<()> {
             let mut data = bytes::BytesMut::with_capacity(4);
             data.extend_from_slice(&u32::to_be_bytes(i));
             let frame = rustrtc::media::VideoFrame {
-                timestamp: Duration::from_millis(i as u64 * 33),
+                rtp_timestamp: i as u32 * 3000,
                 data: data.freeze(),
                 is_last_packet: true,
                 payload_type: None,
@@ -428,7 +428,7 @@ async fn interop_vp8_echo_with_pli() -> Result<()> {
             let mut data = bytes::BytesMut::with_capacity(4);
             data.extend_from_slice(&u32::to_be_bytes(i));
             let frame = rustrtc::media::VideoFrame {
-                timestamp: Duration::from_millis(i as u64 * 33),
+                rtp_timestamp: i as u32 * 3000,
                 data: data.freeze(),
                 is_last_packet: true,
                 payload_type: None,

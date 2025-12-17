@@ -159,8 +159,7 @@ impl MediaSource for IvfSource {
                     .store(current_rtp_time, Ordering::SeqCst);
 
                 let vf = VideoFrame {
-                    timestamp: Duration::from_secs_f64(timestamp_sec),
-                    rtp_timestamp: Some(current_rtp_time),
+                    rtp_timestamp: current_rtp_time,
                     data: frame.freeze(),
                     ..Default::default()
                 };

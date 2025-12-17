@@ -113,8 +113,7 @@ async fn test_padding_packet_drop() -> Result<()> {
     // Packet 1: Valid
     println!("Sending P1");
     let f1 = VideoFrame {
-        timestamp: Duration::from_millis(0),
-        rtp_timestamp: Some(1000),
+        rtp_timestamp: 1000,
         width: 0,
         height: 0,
         format: VideoPixelFormat::Unspecified,
@@ -132,8 +131,7 @@ async fn test_padding_packet_drop() -> Result<()> {
     // Packet 2: Empty (Padding)
     println!("Sending P2");
     let f2 = VideoFrame {
-        timestamp: Duration::from_millis(0),
-        rtp_timestamp: Some(1000),
+        rtp_timestamp: 1000,
         width: 0,
         height: 0,
         format: VideoPixelFormat::Unspecified,
@@ -151,8 +149,7 @@ async fn test_padding_packet_drop() -> Result<()> {
     // Packet 3: Valid
     println!("Sending P3");
     let f3 = VideoFrame {
-        timestamp: Duration::from_millis(33),
-        rtp_timestamp: Some(4000),
+        rtp_timestamp: 4000,
         width: 0,
         height: 0,
         format: VideoPixelFormat::Unspecified,

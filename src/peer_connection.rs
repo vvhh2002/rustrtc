@@ -2276,14 +2276,13 @@ impl RtpSender {
                     res = track.recv() => {
                         match res {
                             Ok(sample) => {
-                                let (clock_rate, payload_type) = {
+                                let payload_type = {
                                     let p = params_lock.lock().unwrap();
-                                    (p.clock_rate, p.payload_type)
+                                    p.payload_type
                                 };
 
                                 let mut packet = sample.into_rtp_packet(
                                     ssrc,
-                                    clock_rate,
                                     payload_type,
                                     &mut sequence_number,
                                 );

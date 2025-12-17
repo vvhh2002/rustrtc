@@ -453,8 +453,6 @@ impl VideoStreamTrack for SelectorTrack {}
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use bytes::Bytes;
 
     use super::*;
@@ -522,8 +520,7 @@ mod tests {
     async fn audio_sample_flow() {
         let (source, track, _) = sample_track(MediaKind::Audio, 8);
         let frame = AudioFrame {
-            rtp_timestamp: None,
-            timestamp: Duration::from_millis(10),
+            rtp_timestamp: 0,
             sample_rate: 48_000,
             channels: 2,
             samples: 960,
@@ -544,8 +541,7 @@ mod tests {
     async fn mismatched_kind_is_error() {
         let (source, _track, _) = sample_track(MediaKind::Audio, 1);
         let video = VideoFrame {
-            timestamp: Duration::from_secs(1),
-            rtp_timestamp: None,
+            rtp_timestamp: 0,
             width: 640,
             height: 480,
             format: VideoPixelFormat::Rgba,
@@ -577,8 +573,7 @@ mod tests {
         let subscriber_b = relay.subscribe();
 
         let frame = AudioFrame {
-            rtp_timestamp: None,
-            timestamp: Duration::from_millis(5),
+            rtp_timestamp: 0,
             sample_rate: 48_000,
             channels: 2,
             samples: 480,

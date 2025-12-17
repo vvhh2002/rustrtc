@@ -81,7 +81,7 @@ async fn test_rtp_mode_peer_connection() -> Result<()> {
         // Send enough packets to ensure reception
         for _ in 0..100 {
             let frame = VideoFrame {
-                timestamp: Duration::from_millis(seq * 33),
+                rtp_timestamp: seq * 3000,
                 data: bytes::Bytes::from(vec![seq as u8; 100]), // Use seq as data to verify
                 is_last_packet: true,
                 ..Default::default()
